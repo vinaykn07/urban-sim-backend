@@ -1,8 +1,18 @@
-// Mitigation controller
 const MitigationStrategy = require("../models/MitigationStrategy");
 const Simulation = require("../models/Simulation");
+const Node = require("../models/Node");
 
 // GET all strategies
+exports.getAllStrategies = async (req, res) => {
+  try {
+    const strategies = await MitigationStrategy.find().sort({ createdAt: -1 });
+    res.json({ success: true, data: strategies });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST apply a mitigation strategy
 exports.applyStrategy = async (req, res) => {
   try {
     const { type, simulationId, targetNodes } = req.body;
@@ -36,7 +46,6 @@ exports.applyStrategy = async (req, res) => {
         { status: "operational" }
       );
 
-      // Emit node restored for each target
       targetNodes.forEach((nodeId) => {
         io.emit("node_status_changed", {
           nodeId,
@@ -54,6 +63,21 @@ exports.applyStrategy = async (req, res) => {
     });
 
     res.status(201).json({ success: true, data: strategy });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+// PATCH deactivate strategy
+exports.deactivateStrategy = async (req, res) => {
+  try {
+    const strategy = await MitigationStrategy.findByIdAndUpdate(
+      req.params.id,
+      { status: "inactive" },
+      { new: true }
+    );
+    if (!strategy) return res.status(404).json({ success: false, error: "Strategy not found" });
+    res.json({ success: true, data: strategy });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
