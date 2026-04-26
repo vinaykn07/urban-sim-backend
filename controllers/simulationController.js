@@ -1,8 +1,45 @@
-// Simulation controller
 const Simulation = require("../models/Simulation");
 const Node = require("../models/Node");
 
 // GET all simulations
+exports.getAllSimulations = async (req, res) => {
+  try {
+    const simulations = await Simulation.find().sort({ createdAt: -1 });
+    res.json({ success: true, count: simulations.length, data: simulations });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// GET single simulation
+exports.getSimulationById = async (req, res) => {
+  try {
+    const sim = await Simulation.findById(req.params.id);
+    if (!sim) return res.status(404).json({ success: false, error: "Simulation not found" });
+    res.json({ success: true, data: sim });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// GET metrics summary
+exports.getMetricsSummary = async (req, res) => {
+  try {
+    const simulations = await Simulation.find({ status: "completed" });
+    const total = simulations.length;
+    const avgDowntime = simulations.reduce((a, b) => a + b.metrics.totalDowntime, 0) / (total || 1);
+    const avgRecovery = simulations.reduce((a, b) => a + b.metrics.recoveryTime, 0) / (total || 1);
+    const avgResilience = simulations.reduce((a, b) => a + b.metrics.resilienceScore, 0) / (total || 1);
+    res.json({
+      success: true,
+      data: { total, avgDowntime, avgRecovery, avgResilience: Math.round(avgResilience) },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST create & run simulation
 exports.createSimulation = async (req, res) => {
   try {
     const { scenarioName, triggerNode, failureIntensity } = req.body;
@@ -14,7 +51,6 @@ exports.createSimulation = async (req, res) => {
     const queue = [triggerNode];
     const visited = new Set();
 
-    // Create simulation as "running"
     const sim = await Simulation.create({
       scenarioName,
       triggerNode,
@@ -25,7 +61,6 @@ exports.createSimulation = async (req, res) => {
       metrics: {},
     });
 
-    // Emit simulation started
     io.emit("simulation_started", {
       simulationId: sim._id,
       scenarioName,
@@ -33,7 +68,6 @@ exports.createSimulation = async (req, res) => {
       timestamp: new Date(),
     });
 
-    // BFS with real-time emit per step
     const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
     while (queue.length > 0) {
@@ -50,35 +84,20 @@ exports.createSimulation = async (req, res) => {
       };
       cascadeLog.push(logEntry);
 
-      // Emit each failure in real time
-      io.emit("node_failed", {
-        simulationId: sim._id,
-        ...logEntry,
-      });
+      io.emit("node_failed", { simulationId: sim._id, ...logEntry });
 
-      // Update node status in DB
-      await Node.findOneAndUpdate(
-        { nodeId: current },
-        { status: "failed" }
-      );
+      await Node.findOneAndUpdate({ nodeId: current }, { status: "failed" });
 
-      // Emit node status change
-      io.emit("node_status_changed", {
-        nodeId: current,
-        status: "failed",
-      });
+      io.emit("node_status_changed", { nodeId: current, status: "failed" });
 
-      await delay(1000); // 1 second between each cascade step
+      await delay(1000);
 
-      const dependents = allNodes.filter(
-        (n) => n.dependencies.includes(current)
-      );
+      const dependents = allNodes.filter((n) => n.dependencies.includes(current));
       dependents.forEach((dep) => {
         if (!visited.has(dep.nodeId)) queue.push(dep.nodeId);
       });
     }
 
-    // Calculate metrics
     const metrics = {
       totalDowntime: affectedNodes.length * 8,
       responseDelay: affectedNodes.length * 3,
@@ -87,7 +106,6 @@ exports.createSimulation = async (req, res) => {
       resilienceScore: Math.max(0, 100 - affectedNodes.length * 12),
     };
 
-    // Update simulation as completed
     await Simulation.findByIdAndUpdate(sim._id, {
       status: "completed",
       affectedNodes,
@@ -95,7 +113,6 @@ exports.createSimulation = async (req, res) => {
       metrics,
     });
 
-    // Emit simulation completed
     io.emit("simulation_completed", {
       simulationId: sim._id,
       affectedNodes,
@@ -109,5 +126,16 @@ exports.createSimulation = async (req, res) => {
     });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+// DELETE simulation
+exports.deleteSimulation = async (req, res) => {
+  try {
+    const sim = await Simulation.findByIdAndDelete(req.params.id);
+    if (!sim) return res.status(404).json({ success: false, error: "Simulation not found" });
+    res.json({ success: true, message: "Simulation deleted" });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
