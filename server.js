@@ -18,7 +18,15 @@ const io = new Server(server, {
 
 connectDB();
 
-app.use(cors({ origin: "*" }));
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: false
+}));
+
+// Handle preflight requests
+app.options("*", cors());
 app.use(express.json());
 app.use(morgan("dev"));
 
